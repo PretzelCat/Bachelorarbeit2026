@@ -1,0 +1,886 @@
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;                                                                     ;;
+;; A) INITIALISIERUNG                                                  ;;
+;;                                                                     ;;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+
+;; a.1) GLOBALE VARIABLEN -----------------------------------------------
+globals [
+  
+  ;; Monitoring
+  tage-gesamt
+  tag
+  monate-gesamt
+  monat
+  jahr
+  anzahl-phase-II
+  erledigte-arbeitspakete-gesamt
+  erledigte-fehler-gesamt
+  erledigte-arbeitspakete-pro-jahr
+  erledigte-fehler-pro-jahr
+  durchschnittliche-abhängigkeit ;relevant für Sozialen Einfluss
+  
+  ;; Phasenrelevant
+  fehler-pool
+  aktuelle-phase
+  fehler-anfang-arbeitsphase
+  fehler-gesamt_gemerkt?
+  
+  ;; Export/Import der Welt und des Interfaces
+  speicherort
+  
+  ;; Ermittlung des ersten Enwicklers der jeweiligen Entwicker Spezies
+  erster-entlassen?
+  erster-ohne-KI-Entwickler-generiert?
+  erster-unreflektierter-KI-Entwickler-generiert?
+  erster-reflektierter-KI-Entwickler-generiert?
+  
+  ;; geheime Flag, um die Zeitspanne der Simulation auf unendlich zu stellen.
+  ;; Nur über die Konsole aktivierbar. Wenn "true" dann ist der Endlosmodus
+  ;; aktiviert. Nach dem initialisieren anwenden. 
+  ;; WICHTIG: Die Graphen vor dem Initialisieren auf "auto scale x-axis" stellen.
+  offenes-ende?
+]
+
+
+
+;; a.2) SPEZIES ---------------------------------------------------------
+
+breed [ohne-KI-entwickler ein-ohne-KI-entwickler] ;; plural singular
+ohne-KI-entwickler-own [alter start-monat abhängigkeit kompetenz arbeitspaket-zugewiesen? erster-seiner-art? zugewiesenes-arbeitspaket arbeits-geschwindigkeit fehlerkorrektur-geschwindigkeit]
+
+breed [unreflektierte-KI-entwickler unreflektierter-KI-entwickler]
+unreflektierte-KI-entwickler-own [alter start-monat abhängigkeit kompetenz arbeitspaket-zugewiesen? erster-seiner-art? zugewiesenes-arbeitspaket  arbeits-geschwindigkeit fehlerkorrektur-geschwindigkeit]
+
+breed [reflektierte-KI-entwickler reflektierter-KI-entwickler]
+reflektierte-KI-entwickler-own [alter start-monat abhängigkeit kompetenz arbeitspaket-zugewiesen? erster-seiner-art? zugewiesenes-arbeitspaket arbeits-geschwindigkeit fehlerkorrektur-geschwindigkeit]
+
+breed [arbeitspakete arbeitspaket]
+arbeitspakete-own [arbeitsschritte vergeben? fehlerpaket? fehler]
+
+
+;; a.3) INITIALISIERUNG DER SIMULATION ----------------------------------
+
+to initialisierung ;Schaltfläche "Initialisierung"
+  
+  clear-all
+  
+  generiere-zufalls-seed
+  
+  set erster-entlassen? (false)
+  set erster-ohne-KI-Entwickler-generiert? (false)
+  set erster-unreflektierter-KI-Entwickler-generiert? (false)
+  set erster-reflektierter-KI-Entwickler-generiert? (false)
+  
+  set anzahl-phase-II 0
+  set erledigte-arbeitspakete-gesamt 0
+  set erledigte-fehler-gesamt 0
+  set erledigte-arbeitspakete-pro-jahr 0
+  set erledigte-fehler-pro-jahr 0
+  
+  set offenes-ende? false
+  
+  set aktuelle-phase 1
+  erschaffe-arbeitspakete (arbeitspakete-pro-phase-I) (arbeitsschritte-pro-arbeitspaket) (fehler-pro-arbeitspaket)
+  
+  ;; Merke dir, wie viele Fehler es zu Beginn der Arbeitsphase gibt
+  set fehler-anfang-arbeitsphase (sum [fehler] of arbeitspakete)
+  
+  erschaffe-ohne-KI-entwickler (initiale-entwickler-anzahl)
+  
+  reset-ticks
+  
+end
+
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;                                                                     ;;
+;; B) HAUPTPROGRAMM                                                    ;;
+;;                                                                     ;;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+to start ;Schaltfläche "Start"
+  
+  update-simulationszeit
+  
+  ; Beende die Simulation, bevor der zweite Generationswechsel ausgeführt wird 
+  if ((jahr = (renteneintritts-alter * 2)) AND (offenes-ende? = false) ) 
+  [ 
+    if (exportiere-welt? = true) 
+    [
+      exportiere-welt ("gen2")
+      set exportiere-welt? false
+    ]
+    if (exportiere-interface? = true) 
+    [
+      exportiere-interface ("gen2") 
+      set exportiere-interface? false
+    ]
+    
+    ; Aus irgendeinen Grund ist bei jedem Durchlauf am Ende eine spitze die das 2 bis 3-fache
+    ; des Vorjahreswerts beträgt. Das bringt die automatische Skallierung der Graphen durcheinander
+    set erledigte-arbeitspakete-pro-jahr 0
+    set erledigte-fehler-pro-jahr 0 
+    
+    ; plots werden durch "tick" geupdatet. Da wir aber am Ende der Simulation
+    ; ein "tick" unterschlagen, müssen wir die plots manuell aktuallisieren.
+    update-plots
+    stop 
+  ]
+  
+  ; Wenn vom Anwender gewünscht, stoppe die Simulation vor dem ersten Generationswechsel
+  ; Exportiere anschließend die Welt. D.h. alle Variablen, Agenten, Patches, Interfaces, Regeln, etc. werden gespeichert.
+  ; Die .csv Datei kann danach importiert werden. Damit lassen sich alle Szenarien mit den selben Vorbedingungen testen.
+  if ((jahr = renteneintritts-alter) AND (ist-monatsanfang? = true) AND (exportiere-welt? = true) ) 
+  [
+    exportiere-welt ("gen1")
+    if (exportiere-interface? = true) [exportiere-interface ("gen1")]
+   
+    stop 
+  ]
+  
+  ;; Kündige am Monatsanfang Rentner und ersetze sie durch Berufseinsteiger
+  if (ist-monatsanfang?)
+  [
+    update-mitarbeiter-alter
+    stelle-ein-und-kündige
+  ]
+  
+  ;; Ändere zum Beginn den Farbton alter Entwickler und setze Variablen für die Graphen zurück
+  if (ist-jahresanfang?)
+  [
+    visualisiere-entwickler-alter 
+    set erledigte-arbeitspakete-gesamt (erledigte-arbeitspakete-gesamt + erledigte-arbeitspakete-pro-jahr)
+    set erledigte-fehler-gesamt (erledigte-fehler-gesamt + erledigte-fehler-pro-jahr)
+    set erledigte-arbeitspakete-pro-jahr 0
+    set erledigte-fehler-pro-jahr 0 
+  ]
+  
+  
+  ; Wechle zwischen Phase I und II
+  (ifelse
+    (aktuelle-phase = 1)[phase-I]
+    (aktuelle-phase = 2)[phase-II]
+    
+    ;; Fehlerfall
+    [print "Die aktuelle Phase ist weder I noch II"]
+  )  
+  
+  ;; Weise alle Entwickler an, ihre Arbeit zu vollrichten.
+  ;; Die Arbeits Reihenfolge der Entwickler wird jeden Tick neu ausgewürfelt
+  ask turtles with [ breed != arbeitspakete ] [ arbeit ]
+  
+  ;; Erhöhe den Simulationstick Counter um 1
+  tick 
+  
+end
+
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;                                                                     ;;
+;; C) PROZEDUREN                                                       ;;
+;;                                                                     ;;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+
+;;;; c.1) HAUPT-PROZEDUREN ----------------------------------------------
+
+
+to erfahrung [ ist-Fehlerpaket? ]
+  ;;; Aktuallisiert die Attribute der Entwickler
+
+  (ifelse
+    
+    ;; FALL A: Entwickler arbeitet an Fehlerpaket
+    (ist-Fehlerpaket? = true)
+    [
+      set kompetenz ( kompetenz + (lernrate_α * kompetenz) ) 
+    ]
+    
+    ;; FALL B: Entwickler arbeitet an Arbeitspaket
+    [
+      (ifelse
+        
+        ( breed = unreflektierte-KI-entwickler ) 
+        [
+          (ifelse ((kompetenz <= 0) OR (kompetenz >= 1))
+            [
+              set abhängigkeit precision ( abhängigkeit + sozialer-einfluss (abhängigkeit) ) 8 
+            ]
+            [
+              set abhängigkeit precision ( abhängigkeit + sozialer-einfluss (abhängigkeit) + (KI_Abhängigkeits_Zunahme_γ * (1 - kompetenz)) ) 8 
+            ]
+          )
+          set kompetenz precision ( kompetenz - (vergessensrate_β * kompetenz) ) 8
+        ]
+        
+        
+        (breed = reflektierte-KI-entwickler)
+        [
+          (ifelse ((kompetenz <= 0) OR (kompetenz >= 1))
+            [
+              set abhängigkeit precision (abhängigkeit + sozialer-einfluss (abhängigkeit)) 8 
+            ]
+            [
+              set abhängigkeit precision (abhängigkeit - lernrate_α + (KI_Abhängigkeits_Zunahme_γ * (1 - kompetenz) ) + sozialer-einfluss (abhängigkeit)) 8 
+            ]
+          )
+          set kompetenz precision ( kompetenz + (lernrate_α * kompetenz) ) 8
+        ]
+        
+        
+        ( breed = ohne-KI-entwickler )
+        [
+          (ifelse ((kompetenz <= 0) OR (kompetenz >= 1))
+            [
+              set abhängigkeit precision (abhängigkeit + sozialer-einfluss (abhängigkeit)) 8 
+            ]
+            [
+              set abhängigkeit precision( abhängigkeit - lernrate_α + sozialer-einfluss (abhängigkeit) ) 8
+            ]
+          )
+          set kompetenz precision ( kompetenz + (lernrate_α * kompetenz) ) 8
+        ]
+      ) 
+      
+    ]
+  )
+  ;; Maßnahmen, um den Wertebereich [0,1] nicht zu verlassen
+  if (precision abhängigkeit 8 >= 1) [set abhängigkeit 1]
+  if (precision abhängigkeit 8 <= 0) [set abhängigkeit 0]
+  
+  if (precision kompetenz 8 >= 1) [set kompetenz 1]
+  if (precision kompetenz 8 <= 0) [set kompetenz 0]
+  
+  
+  ;; Neuberechnung Arbeitsgeschwindigkeit
+  (ifelse
+    
+    ( (breed = reflektierte-KI-entwickler) OR (breed = unreflektierte-KI-entwickler) )
+    [
+      set arbeits-geschwindigkeit (KI-Arbeitsgeschwindigkeit_ρ * abhängigkeit + kompetenz)
+      set fehlerkorrektur-geschwindigkeit (kompetenz)
+    ]
+    
+    ( breed = ohne-KI-entwickler )
+    [ 
+      set arbeits-geschwindigkeit (kompetenz) 
+      set fehlerkorrektur-geschwindigkeit (kompetenz)
+    ]
+  )
+  ;; Maßnahmen, um den Wertebereich [0,1] nicht zu verlassen
+  if (precision arbeits-geschwindigkeit 8 >= 1) [set arbeits-geschwindigkeit 1]
+  if (precision arbeits-geschwindigkeit 8 <= 0) [set arbeits-geschwindigkeit 0]
+end
+
+
+
+to aktuallisiere-durchschnittliche-abhängigkeit
+  ;;; Berechnet die Durchschnittliche Abhängigkeit aller Entwickler
+  
+  let gesamtsumme-abhängigkeit ( sum [ abhängigkeit ] of turtles with [ breed != arbeitspakete ] )
+  let gesamtsumme-mitarbeiter ( count turtles with [ breed != arbeitspakete ] )
+  
+  set durchschnittliche-abhängigkeit ( gesamtsumme-abhängigkeit / gesamtsumme-mitarbeiter )
+end
+
+
+
+to arbeit
+  ;;; Koordiniert die Interaktion zwischen Entwickler und Arbeitspaketen
+  ;;; Abhängig von der aktuellen Arbeitsphase
+  
+  
+  ;; Prüfe ob ein Phasenwechsel ansteht. Wenn ja stoppe die aktuelle Phase
+  if ( (aktuelle-Phase = 1) AND (phase-I? = false) ) [ stop ] 
+  if ( (aktuelle-Phase = 2) AND (phase-II? = false) ) [ stop ] 
+  
+  ;; Speichere die Arbeitsgeschwindigkeit des aktuellen Agenten
+  ;; Ohne diesen Schritt, kann ab "ask out-link-neighbors" nicht
+  ;; mehr auf die kompetenz und arbeitsgeschwindigkeit des Agenten
+  ;; zurückgegriffen werden. 
+  let bearbeitete-fehler (fehlerkorrektur-geschwindigkeit)
+  let arbeitsmenge (arbeits-geschwindigkeit)
+  
+  
+  (ifelse
+    (aktuelle-Phase = 1)
+    [  
+      ;; Weise dem aktuellen Agenten ein Arbeitspaket zu
+      arbeitspaket-zuweisen
+      
+      
+      ;; Weise den aktuellen Agenten an, am verlinkten Arbeitspaket zu arbeiten
+      ask out-link-neighbors 
+      [ 
+        ;;;; (out-link-neighbors enthält nur das mit dem aktuell ausgewählten Agenten
+        ;;;; verbundene Arbeitspaket. Warum nicht auch die anderen Agenten, die mit 
+        ;;;; dem Paket verbunden sind? Weil jeder Agent eine monodirektionale Verbindung
+        ;;;; zum Arbeitspaket aufgebaut mittels der Funktion "arbeitspaket-zuweisen".
+        
+        (ifelse   
+          ;; Ist das verknüpfte Arbeitspaket ein Fehlerpaket?
+          ;; Wenn ja, dann gibt es keine Arbeitsschritte zum erledigen, sondern nur Fehler
+          (fehlerpaket? = true)
+          [
+            bearbeite-fehler (bearbeitete-fehler)            
+            ask myself [erfahrung true ] ;true -> Fehlerpaket
+          ]
+          
+          ;; Wenn nein, dann ist es ein Arbeitspaket.
+          
+          ;; Hier stellt sich die Frage: 
+          ;; ? Kann der Agent die Aufgabe innerhalb dieses Ticks erledigen?
+          
+          ;; -> Nein? 
+          ( (arbeitsschritte - arbeitsmenge ) > 0 )
+          [
+            ;; Dann reduziere die Arbeitsschritte und Fehler des Arbeitspakets
+            set arbeitsschritte ( arbeitsschritte - arbeitsmenge )
+            set erledigte-arbeitspakete-pro-jahr (erledigte-arbeitspakete-pro-jahr + arbeitsmenge)
+            bearbeite-fehler (bearbeitete-fehler)
+            
+            ask myself [erfahrung false] ;false -> Arbeitspaket
+          ]
+          
+          ;; -> Ja?
+          ( (arbeitsschritte - arbeitsmenge ) <= 0 )
+          [
+            ;; Dann füge die verbliebenen Fehler dem Fehlerpool hinzu
+            set fehler-pool (fehler-pool + fehler)
+            
+            set erledigte-arbeitspakete-pro-jahr (erledigte-arbeitspakete-pro-jahr + arbeitsschritte)
+            ask myself [erfahrung false] ;false -> Arbeitspaket
+            
+            
+            ;; Danach Arbeitspaket, sag allen Entwicklern die dir zugeteilt waren,
+            ;; dass sie sich ein neues Aufgabenpaket suchen müssen
+            ask in-link-neighbors
+            [
+              set arbeitspaket-zugewiesen? false
+            ]
+            
+            ;; Zerstöre zum Schluss das Arbeitspaket + alle Verbindungen die das 
+            ;; Arbeitspaket mit den Entwickler(n) verbunden hat
+            die
+          ]
+          
+        )
+      ]
+    ]
+    
+    (aktuelle-Phase = 2)
+    [
+      arbeitspaket-zuweisen
+      
+      ;; Da es nur ein Fehlerpaket gibt in der Korrekturphase,
+      ;; können wir mit der Prozedur alle Entwickler zum arbeiten animieren
+      ask out-link-neighbors 
+      [ 
+        bearbeite-fehler (bearbeitete-fehler)
+        ask myself [erfahrung (true)] ;true -> Fehlerpaket
+      ]
+    ]
+  )
+  
+  aktuallisiere-durchschnittliche-abhängigkeit
+end
+
+
+to bearbeite-fehler [anzahl]
+  ;;; Koordiniert das Attribut "Fehler" der Arbeitspakete
+  ;;; und die Elimination von erledigten Arbeits- bzw. Fehlerpaketen
+  
+  ;; Prüfe, ob die Bearbeitung der Fehler abgeschlossen ist
+  (ifelse 
+    
+    ; FALL A) Nein - passe die Anzahl der verbleibenden Fehler an
+    ((fehler - anzahl) > 0)
+    [
+      set erledigte-fehler-pro-jahr (erledigte-fehler-pro-jahr + anzahl)
+      set fehler ( fehler - anzahl )
+    ]
+    
+    ; FALL B) Ja - setze den Fehler-Counter auf 0
+    [
+      set erledigte-fehler-pro-jahr (erledigte-fehler-pro-jahr + fehler)
+      set fehler 0          
+    ]
+  )
+end
+
+
+
+to arbeitspaket-zuweisen 
+  ;;; Koordiniert die Zuweisung von Arbeits- und Fehlerpaketen an die Entwickler
+  
+  ;; Wurde dem Agent bereits ein Arbeitspaket zugewiesen?
+  if (arbeitspaket-zugewiesen? = false)
+    [
+      ;; Suche ein freies Arbeits- bzw. Fehlerpaket
+      let aufgabe one-of arbeitspakete with [ vergeben? = false ]
+      
+      ;; War die Suche erfolgreich?
+      (ifelse 
+        
+        ;; FALL A) Ja - Es gibt noch freie Pakete
+        (aufgabe != nobody)  
+        [ 
+          ask aufgabe 
+          [
+            ;; Verknüpfe Agenten und Arbeitspaket miteinander
+            create-link-with myself
+            set vergeben? true 
+          ]
+        ]
+        
+        ;; FALL B) NEIN - Alle Pakete sind vergeben
+        [
+          ;; Dann teile den Agenten einem zufälligen Arbeitspaket zu
+          ask one-of arbeitspakete                                                                           
+          [
+            ;; Verknüpfe Agenten und Arbeitspaket miteinander
+            create-link-with myself
+          ]
+        ]
+      )
+      set arbeitspaket-zugewiesen? true
+  ]
+end
+
+
+;; Aktuallisiert die Zeit innerhalb der Simulation
+to update-simulationszeit
+  
+  set tage-gesamt (floor(ticks / ticks-per-tag))
+  set tag ((tage-gesamt mod (arbeitstage-pro-monat)) + 1)
+  set monate-gesamt (floor(ticks / (ticks-per-tag * arbeitstage-pro-monat)))
+  set monat ((monate-gesamt mod 12) + 1 )
+  set jahr (floor(monate-gesamt / 12))
+  
+end
+
+
+;; Aktuallisiert das Alter der Mitarbeiter
+to update-mitarbeiter-alter
+  
+  ask ohne-KI-Entwickler [set alter (floor((monate-gesamt - start-monat) / 12 ))]
+  ask unreflektierte-KI-Entwickler [set alter (floor((monate-gesamt - start-monat) / 12 ))]
+  ask reflektierte-KI-Entwickler [set alter (floor((monate-gesamt - start-monat) / 12 ))]  
+  
+end
+
+
+;; Koordiniert das Ersetzen der Gen1 Entwickler durch Gen2 Entwickler
+to stelle-ein-und-kündige
+  
+  ;; Natürliches Wachstum der Belegschaft die keine KI nutzt, bis der erste in Rente geht
+  ifelse jahr < renteneintritts-alter[ 
+    if count ohne-KI-Entwickler <= max-anz-entwickler [erschaffe-ohne-KI-Entwickler (random 2)] ;gleiche Wahrscheinlichkeit für 0;1;
+  ]
+  
+  ;; Entlassung von Rentnern & Ersetzen durch neue Kollegen
+  [
+    
+    ;; Zähle die aktuelle Anzahl an Rentnern
+    let anzahl-rentner (
+      (count ohne-KI-entwickler with [alter >= renteneintritts-alter]) 
+      + (count unreflektierte-KI-entwickler with [alter >= renteneintritts-alter]) 
+      + (count reflektierte-KI-entwickler with [alter >= renteneintritts-alter])
+    )
+    
+    
+    ;; Kündige die Rentner
+    ask ohne-KI-entwickler with [alter >= renteneintritts-alter] 
+    [
+      ;; Zurücksetzen der Flags, damit ich im Szenario "ohne-KI-Entwickler" die Entwicklung
+      ;; eines ohne-KI-Entwicklers im vollbestückten Betrieb beobachten kann
+      if (erster-seiner-Art? = true) [set erster-ohne-KI-Entwickler-generiert? false] 
+      if (erster-entlassen? = false) [set erster-entlassen? true]
+      
+      die
+    ]
+    ask unreflektierte-KI-entwickler with [alter >= renteneintritts-alter] [die]
+    ask reflektierte-KI-entwickler with [alter >= renteneintritts-alter] [die]
+    
+    
+    ;; Stelle neue Kollegen abhängig vom Szenario ein
+    (ifelse 
+      szenario-auswahl = "keine-KI-Entwickler" [erschaffe-ohne-KI-Entwickler (anzahl-rentner)]
+      szenario-auswahl = "unreflektierte-KI-Entwickler" [erschaffe-unreflektierte-KI-Entwickler (anzahl-rentner)]
+      szenario-auswahl = "reflektierte-KI-Entwickler" [erschaffe-reflektierte-KI-Entwickler (anzahl-rentner)]
+    )
+  ]  
+end
+
+
+;; Koordiniert den Ablauf der Konzeptionsphase
+to phase-I
+  
+  ; Entferne alle Arbeitspakete ohne Fehler
+  ask arbeitspakete with [(arbeitsschritte = 0) AND (fehler = 0)] 
+  [
+    die
+  ] 
+  
+  ; Übertrage die unerledigten Fehler in Phase II 
+  ; und entferne danach die Arbeitspakte
+  ask arbeitspakete with [arbeitsschritte = 0]
+  [
+    set fehler-pool (fehler-pool + fehler)
+    die
+  ] 
+  
+  ; Wechsle anschließend in die nächste Phase
+  if (NOT phase-I?)
+  [
+    ; Setze den Arbeitsstatus aller Arbeiter zurück
+    ask turtles with [breed != "arbeitspakete"] [ set arbeitspaket-zugewiesen? false ]
+    
+    set aktuelle-phase 2
+    erschaffe-arbeitspakete (1) (0) (fehler-pool)
+    
+    ;; Merke dir, wie viele Fehler es zu Beginn der Arbeitsphase gibt
+    set fehler-anfang-arbeitsphase (sum [fehler] of arbeitspakete)
+    
+    set fehler-pool 0
+  ]
+  
+end
+
+
+;; Koordiniert den Ablauf der Korrekturphase
+to phase-II
+  
+  ;; Wenn der Fehlerschwellenwert unterschritten wird, kehre zurück zur Phase I
+  if (not phase-II?)
+  [    
+    ; Setze den Arbeitsstatus aller Arbeiter zurück
+    ask turtles with [breed != arbeitspakete] [ set arbeitspaket-zugewiesen? false ]
+    
+    set fehler-pool (sum [fehler] of arbeitspakete)
+    ask arbeitspakete with [ fehlerpaket? = true ] 
+    [
+      die 
+    ]
+    
+    set aktuelle-phase 1
+    set anzahl-phase-II (anzahl-phase-II + 1)
+    set fehler-anfang-arbeitsphase 0
+    set fehler-gesamt_gemerkt? false
+    
+    erschaffe-arbeitspakete (arbeitspakete-pro-phase-I) (arbeitsschritte-pro-arbeitspaket) (fehler-pro-arbeitspaket)
+    
+    ;; Übertrage die Restfehler in ein Fehlerpaket 
+    if ((fehler-pool) > 0)
+    [
+      erschaffe-arbeitspakete (1) (0) (fehler-pool)
+    ]
+    
+    set fehler-pool 0
+    
+    ;; Merke dir, wie viele Fehler es zu Beginn der Arbeitsphase gibt
+    set fehler-anfang-arbeitsphase (sum [fehler] of arbeitspakete)
+  ]
+  
+end
+
+
+
+;;;;; c.2) GENERATOREN --------------------------------------------------
+
+
+;; Generiert Entwickler ohne KI Zugriff
+to erschaffe-ohne-KI-Entwickler [anzahl]
+  
+  if anzahl > 0 [
+    create-ohne-KI-Entwickler (anzahl)
+    [
+      set shape "circle"
+      set color cyan + 2
+      set alter 0
+      
+      set abhängigkeit (initiale-abhängigkeit)
+      set kompetenz (initiale-kompetenz)
+      set arbeits-geschwindigkeit (kompetenz)
+      set fehlerkorrektur-geschwindigkeit (kompetenz)
+      
+      set start-monat (monate-gesamt)
+      set arbeitspaket-zugewiesen? false
+      
+      ;; Verteile die Pakete auf zufällige x/y Koordinaten
+      setxy random-xcor random-ycor
+      
+      ;; Markiere den ersten ohne-KI-Entwicler
+      (ifelse (NOT erster-ohne-KI-Entwickler-generiert?) 
+        [ 
+          set erster-ohne-KI-Entwickler-generiert? true 
+          set erster-seiner-art? true
+        ]
+        [ set erster-seiner-art? false ]
+      )
+    ]
+  ]
+end
+
+
+;; Generiert unreflektierte KI Entwickler
+to erschaffe-unreflektierte-KI-Entwickler [anzahl]
+  
+  if anzahl > 0 [
+    create-unreflektierte-KI-Entwickler (anzahl)
+    [
+      set shape "pentagon"
+      set color lime + 2
+      set alter 0
+      
+      set abhängigkeit (initiale-abhängigkeit)
+      set kompetenz (initiale-kompetenz)
+      set arbeits-geschwindigkeit (kompetenz)
+      set fehlerkorrektur-geschwindigkeit (kompetenz)
+      
+      set start-monat (monate-gesamt)
+      set arbeitspaket-zugewiesen? false
+      
+      ;; Verteile die Pakete auf zufällige x/y Koordinaten
+      setxy random-xcor random-ycor
+      
+      ;; Markiere den ersten unreflektierten KI Entwickler
+      (ifelse (NOT erster-unreflektierter-KI-Entwickler-generiert?) 
+        [ 
+          set erster-unreflektierter-KI-Entwickler-generiert? true 
+          set erster-seiner-art? true
+        ]
+        [ set erster-seiner-art? false ]
+      )
+    ]
+  ]
+end
+
+;; Generiert reflektierte KI Entwickler
+to erschaffe-reflektierte-KI-Entwickler [anzahl]
+  
+  if anzahl > 0 [
+    create-reflektierte-KI-Entwickler (anzahl)
+    [
+      set shape "triangle"
+      set color yellow + 2
+      set alter 0
+      
+      set abhängigkeit (initiale-abhängigkeit)
+      set kompetenz (initiale-kompetenz)
+      set arbeits-geschwindigkeit (kompetenz)
+      set fehlerkorrektur-geschwindigkeit (kompetenz)
+      
+      set start-monat (monate-gesamt)
+      set arbeitspaket-zugewiesen? false
+      setxy random-xcor random-ycor
+      
+      ;; Markiere den ersten reflektierten KI Entwickler
+      (ifelse (NOT erster-reflektierter-KI-Entwickler-generiert?) 
+        [ 
+          set erster-reflektierter-KI-Entwickler-generiert? true 
+          set erster-seiner-art? true
+        ]
+        [ set erster-seiner-art? false ]
+      )
+    ]
+  ]
+end
+
+
+;; Generiert sowohl Arbeits- als auch Fehlerpakete
+to erschaffe-arbeitspakete [anzahl-pakete anzahl-arbeitsschritte anzahl-fehler]
+  
+  (ifelse 
+    
+    ;; Generiere Arbeitspakete für Phase I
+    (anzahl-arbeitsschritte > 0)
+    [
+      create-arbeitspakete (anzahl-pakete)
+      [
+        ;; Verteile die Pakete auf zufällige x/y Koordinaten
+        setxy random-xcor random-ycor  
+        
+        set arbeitsschritte (anzahl-arbeitsschritte)
+        set fehler (anzahl-fehler)
+        
+        set vergeben? false
+        set fehlerpaket? false
+        set color pink + 2
+        set shape "box"
+        set size 2
+      ] 
+    ]
+    ;; Generiere Fehlerpakete für Phase II 
+    ;; und für den Übergang von Phase II zu Phase I
+    (anzahl-arbeitsschritte = 0)
+    [
+      create-arbeitspakete (anzahl-pakete)
+      [
+        set arbeitsschritte (anzahl-arbeitsschritte)
+        set fehler (anzahl-fehler)
+        set vergeben? false
+        set fehlerpaket? true
+        set color pink - 2
+        set shape "box"
+        set size 4
+      ] 
+    ]
+    ;; Fehlerstatus
+    [print "Die aktuelle Phase ist weder 1 noch 2"]
+  )   
+end
+
+
+;; Generiert einen zufallsseed für den Zufallszahlen Generator
+to generiere-zufalls-seed
+  
+  ;; Zufallsseed bei bedarf einfrieren
+  if (seed-einfrieren? = false)[set zufalls-seed (new-seed)]
+  show (word "Aktueller Zufallsseed: " zufalls-seed)
+  random-seed zufalls-seed
+  
+end
+
+
+
+;;;;; c.3) DATEN IMPORT/EXPORT  ------------------------------------------
+
+;; Exportiert die aktuelle Welt
+to exportiere-welt [generation]
+  
+  ;; Setze den Switch im Interface zurück. Sonst wird der Anwender jedes mal
+  ;; gefragt, das importierte Szenario erneut zu exportieren
+  set exportiere-welt?  false
+  set speicherort user-new-file ; gibt false zurück wenn der Speicherdialog abgebrochen wird
+  
+  (ifelse 
+    ;; User-Dialog erfolgreich
+    (speicherort != false)[export-world (word speicherort "_welt_" generation ".csv")]
+    
+    ;; User-Dialog geht schief
+    [show "Welt wurde nicht exportiert, da kein Speicherort angegeben wurde." stop]
+  )
+end
+
+;; Importiert ein existierende Welten Datei
+to importiere-eine-welt
+  
+  set speicherort user-file
+  
+  (ifelse 
+    ;; User-Dialog erfolgreich
+    (speicherort != false) [import-world speicherort]
+    
+    ;; User-Dialog geht schief
+    [show "Welt konnte nicht importiert werden, da kein Speicherort angegeben wurde." stop]
+  )
+end
+
+;; Exportiert das Interface der Simulation
+to exportiere-interface [generation]
+  
+  (ifelse
+    (generation != "") [export-interface (word speicherort "_interface_" generation ".png")]
+    [    
+      let speicherort_tmp user-file
+      
+      (ifelse  
+        ;; User-Dialog erfolgreich
+        (speicherort_tmp != false) [export-interface speicherort_tmp]
+        
+        ;; User-Dialog geht schief
+        [show "Interface konnte nicht exportiert werden, da kein Speicherort angegeben wurde." stop]
+      )
+    ]
+  )
+end
+
+
+
+;;;;; c.4) Visuelle Gimmicks  -------------------------------------------
+
+;; Visuallisiert das Alter der Entwickler 
+to visualisiere-entwickler-alter  
+  
+  ;; Verdunkle die Farbe der Entwickler nach jedem Drittel ihrer Lebenszeit
+  
+  foreach [0.33333 0.66666] ; i im ersten Durchlauf 0.33333. Im zweiten 0.66666
+  [ 
+    i -> ask turtles with 
+    [(breed != arbeitspakete) AND (alter = (round(renteneintritts-alter * i)))] 
+    [set color (color - 2)] ;
+  ]
+end
+
+
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;                                                                     ;;
+;; D) REPORTER/FUNKTIONEN                                              ;;
+;;                                                                     ;;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+
+;;; Berechnet den Sozialen Einfluss
+to-report sozialer-einfluss [ abhängigkeit-agent ]
+  
+  report Gewichtung_SozialerEinfluss_δ * ( durchschnittliche-abhängigkeit - abhängigkeit-agent )
+  
+end
+
+
+;;; Gibt zurück, ob der aktuelle Monat der erste des Jahres ist
+to-report ist-monatsanfang?
+  
+  ifelse ( ticks mod (ticks-per-tag * arbeitstage-pro-monat) = 0)
+  [ 
+    report (true)
+  ][
+    report (false)
+  ]
+end
+
+;;; Gibt zurück, ob heute der erste Tag des Jahres ist
+to-report ist-jahresanfang?
+  
+  ifelse ((monate-gesamt mod (12) = 0) AND (ist-monatsanfang?))
+  [ 
+    report (true)
+  ][
+    report (false)
+  ]
+end
+
+;;; Gibt zurück, ob die Konzeptionsphase noch aktiv ist  
+to-report phase-I?
+  
+  ;; Wenn die Arbeitschritte aller Arbeitspakete erledigt wurden
+  if ((count arbeitspakete with [arbeitsschritte != 0]) = 0 ) 
+  [
+    ; Gib als letztes bescheid, das wir Phase I verlassen haben
+    report false
+  ]
+  
+  ; Falls nicht, gib bescheid das wir noch in Phase I sind
+  report true
+  
+end
+
+;;; Gibt zurück, ob die Korrekturphase noch aktiv ist  
+to-report phase-II?
+  (ifelse 
+    ( (sum [fehler] of arbeitspakete = 0) OR (((sum [fehler] of arbeitspakete) / fehler-anfang-arbeitsphase < (fehler-schwellenwert / 100)) ))
+    [
+      ; Berichte das wir nicht mehr in Phase II sind
+      report false
+    ]
+    [
+      ; Berichte, das wir immer noch in Phase II sind
+      report true
+    ] 
+  )
+end
+
